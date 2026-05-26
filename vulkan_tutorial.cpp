@@ -35,8 +35,8 @@
 
 constexpr uint32_t WIDTH = 800;
 constexpr uint32_t HEIGHT = 600;
-const std::string MODEL_PATH = "../models/mastersword.obj";
-const std::string TEXTURE_PATH = "../textures/statue.jpg";
+const std::string MODEL_PATH = "../models/viking_room.obj";
+const std::string TEXTURE_PATH = "../textures/viking_room.png";
 constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 
 const std::vector<char const *> validationLayers = {
@@ -215,8 +215,14 @@ private:
             return pts;
         };
 
+        std::vector<glm::vec3> points;
+        for (auto& vert : vertices) {
+            points.push_back(vert.pos);
+        }
+
         std::vector<glm::vec3> tmp;
-        std::tie(tmp, indices) = quickHull3D(withInteriorNoise(makeIcosphere()));
+        std::tie(tmp, indices) = quickHull3D(withInteriorNoise(points));
+        vertices.clear();
         for (auto &t : tmp)
         {
             vertices.emplace_back(Vertex({t}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}));
@@ -257,7 +263,8 @@ private:
         createTextureImage();
         createTextureImageView();
         createTextureSampler();
-        // loadModel();
+        loadModel();
+
         doTheHull();
 
         createVertexBuffer();

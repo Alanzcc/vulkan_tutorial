@@ -12,7 +12,7 @@ dependencies = [
 ]
 
 sources = [
-  'vulkan_tutorial.cpp',
+ 'vulkan_tutorial.cpp',
 ]
 
 exe = executable(

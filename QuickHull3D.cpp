@@ -351,24 +351,25 @@ static void runTest(const std::string &name,
                  indices.size() / 3, expectedTriangles, triOk ? "✓" : "✗");
 }
 
-// ─── main ─────────────────────────────────────────────────────────────────────
 /*
+/// ─── main ─────────────────────────────────────────────────────────────────────
+ 
 int main()
 {
     std::println("=== QuickHull3D Tests ===\n");
-
+ 
     // Icosphere: 12 hull verts, 20 triangular faces
     runTest("Icosphere",    makeIcosphere(), 12, 20);
-
+ 
     // Cube: 8 hull verts, 6 quad-faces = 12 triangles
     runTest("Cube",         makeCube(),       8, 12);
-
+ 
     // Tetrahedron: 4 hull verts, 4 triangular faces
     runTest("Tetrahedron",  makeTetrahedron(), 4,  4);
-
+ 
     // Octahedron: 6 hull verts, 8 triangular faces
     runTest("Octahedron",   makeOctahedron(),  6,  8);
-
+ 
     // ── Robustness: add interior noise — hull counts must not change ─────────
     //
     // Strategy: any convex combination  Σ wᵢ·vᵢ  (wᵢ ≥ 0, Σwᵢ = 1)  of the
@@ -376,12 +377,36 @@ int main()
     // We build each random point as a weighted blend of all hull vertices where
     // the weights are random non-negative values normalised to sum to 1.
     // This works for every convex shape regardless of its geometry.
-
-
+    std::srand(42);
+    auto interiorPointsOf = [](const std::vector<glm::vec3>& hullVerts, int n)
+        -> std::vector<glm::vec3>
+    {
+        const int V = static_cast<int>(hullVerts.size());
+        std::vector<glm::vec3> interior;
+        interior.reserve(n);
+        for (int i = 0; i < n; ++i) {
+            // Draw V random weights, normalise them, then take the weighted sum.
+            std::vector<float> weights(V);
+            float weightSum = 0.f;
+            for (float& w : weights) { w = static_cast<float>(std::rand() + 1); weightSum += w; }
+            glm::vec3 point{0.f};
+            for (int v = 0; v < V; ++v) point += (weights[v] / weightSum) * hullVerts[v];
+            interior.push_back(point);
+        }
+        return interior;
+    };
+ 
+    auto withInteriorNoise = [&](std::vector<glm::vec3> pts) {
+        auto noise = interiorPointsOf(pts, 100);
+        pts.insert(pts.end(), noise.begin(), noise.end());
+        return pts;
+    };
+ 
     std::println("\n-- With 100 interior noise points --");
     runTest("Icosphere+noise",   withInteriorNoise(makeIcosphere()),   12, 20);
     runTest("Cube+noise",        withInteriorNoise(makeCube()),          8, 12);
     runTest("Tetrahedron+noise", withInteriorNoise(makeTetrahedron()),   4,  4);
     runTest("Octahedron+noise",  withInteriorNoise(makeOctahedron()),    6,  8);
 }
-    */
+
+*/
