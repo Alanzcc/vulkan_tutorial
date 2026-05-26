@@ -31,10 +31,12 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
+#include "QuickHull3D.cpp"
+
 constexpr uint32_t WIDTH = 800;
 constexpr uint32_t HEIGHT = 600;
-const std::string MODEL_PATH = "../models/viking_room.obj";
-const std::string TEXTURE_PATH = "../textures/viking_room.png";
+const std::string MODEL_PATH = "../models/mastersword.obj";
+const std::string TEXTURE_PATH = "../textures/statue.jpg";
 constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 
 const std::vector<char const *> validationLayers = {
@@ -110,23 +112,6 @@ struct UniformBufferObject
     glm::mat4 proj;
 };
 
-/*
-const std::vector<Vertex> vertices = {
-    {{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}},
-    {{0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}},
-    {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}},
-    {{-0.5f, 0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}},
-
-    {{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}},
-    {{0.5f, -0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f}},
-    {{0.5f, 0.5f, -0.5f}, {0.0f, 0.0f, 1.0f}, {1.0f, 1.0f}},
-    {{-0.5f, 0.5f, -0.5f}, {1.0f, 1.0f, 1.0f}, {0.0f, 1.0f}}};
-
-const std::vector<uint16_t> indices = {
-    0, 1, 2, 2, 3, 0,
-    4, 5, 6, 6, 7, 4};
-*/
-
 class HelloTriangleApplication
 {
 public:
@@ -196,6 +181,48 @@ private:
         vk::KHRSwapchainExtensionName,
     };
 
+    void doTheHull()
+    {
+        std::srand(42);
+        auto interiorPointsOf = [](const std::vector<glm::vec3> &hullVerts, int n)
+            -> std::vector<glm::vec3>
+        {
+            const int V = static_cast<int>(hullVerts.size());
+            std::vector<glm::vec3> interior;
+            interior.reserve(n);
+            for (int i = 0; i < n; ++i)
+            {
+                // Draw V random weights, normalise them, then take the weighted sum.
+                std::vector<float> weights(V);
+                float weightSum = 0.f;
+                for (float &w : weights)
+                {
+                    w = static_cast<float>(std::rand() + 1);
+                    weightSum += w;
+                }
+                glm::vec3 point{0.f};
+                for (int v = 0; v < V; ++v)
+                    point += (weights[v] / weightSum) * hullVerts[v];
+                interior.push_back(point);
+            }
+            return interior;
+        };
+
+        auto withInteriorNoise = [&](std::vector<glm::vec3> pts)
+        {
+            auto noise = interiorPointsOf(pts, 100);
+            pts.insert(pts.end(), noise.begin(), noise.end());
+            return pts;
+        };
+
+        std::vector<glm::vec3> tmp;
+        std::tie(tmp, indices) = quickHull3D(withInteriorNoise(makeIcosphere()));
+        for (auto &t : tmp)
+        {
+            vertices.emplace_back(Vertex({t}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f}));
+        }
+    }
+
     void initWindow()
     {
         glfwInit();
@@ -230,7 +257,9 @@ private:
         createTextureImage();
         createTextureImageView();
         createTextureSampler();
-        loadModel();
+        // loadModel();
+        doTheHull();
+
         createVertexBuffer();
         createIndexBuffer();
         createUniformBuffers();
