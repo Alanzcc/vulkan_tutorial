@@ -3,5 +3,6 @@
 /textures/*
 /models/*
 .editorconfig
+.DS_Store
 .vscode
 *.spv
