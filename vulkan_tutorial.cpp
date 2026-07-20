@@ -543,7 +543,7 @@ private:
 
     void createGraphicsPipeline()
     {
-        vk::raii::ShaderModule shaderModule = createShaderModule(readFile("../shaders/simple.spv"));
+        vk::raii::ShaderModule shaderModule = createShaderModule(readFile("simple.spv"));
 
         vk::PipelineShaderStageCreateInfo vertShaderStageInfo{};
         vertShaderStageInfo.stage = vk::ShaderStageFlagBits::eVertex;
@@ -995,7 +995,6 @@ private:
 
                 vertex.color = {1.0f, 1.0f, 1.0f};
 
-#if 1
                 auto [it, inserted] = uniqueVertices.insert({vertex, static_cast<uint32_t>(vertices.size())});
                 if (inserted)
                 {
@@ -1003,10 +1002,6 @@ private:
                 }
 
                 indices.push_back(it->second);
-#else
-                vertices.push_back(vertex);
-                indices.push_back(static_cast<uint32_t>(indices.size()));
-#endif
             }
         }
     }
