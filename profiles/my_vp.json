@@ -1,0 +1,35 @@
+{
+    "$schema": "https://schema.khronos.org/vulkan/profiles-0.8.2-280.json#",
+    "capabilities": {
+        "my_profile_caps": {
+            "extensions": {
+                "VK_KHR_swapchain": 1,
+                "VK_EXT_extended_dynamic_state": 1
+
+            },
+            "features": {
+                "VkPhysicalDeviceVulkan13Features": {
+                    "dynamicRendering": true,
+                    "synchronization2": true
+                },
+                "VkPhysicalDeviceExtendedDynamicStateFeaturesEXT": {
+                    "extendedDynamicState": true
+                },
+                "VkPhysicalDeviceFeatures": {
+                    "samplerAnisotropy": true
+                }
+            }
+        }
+    },
+    "profiles": {
+        "VP_my_profile": {
+            "version": 1,
+            "api-version": "1.4.0",
+            "label": "My Profile",
+            "description": "Custom profile for my Vulkan app",
+            "capabilities": [
+                "my_profile_caps"
+            ]
+        }
+    }
+}

@@ -13,8 +13,8 @@
 #include <unordered_map>
 
 #define VK_ENABLE_BETA_EXTENSIONS
-#include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_raii.hpp>
+#include "profiles/vulkan_profiles.hpp"
 
 #define GLFW_INCLUDE_VULKAN // REQUIRED only for GLFW CreateWindowSurface.
 #include <GLFW/glfw3.h>
@@ -37,15 +37,12 @@ const std::string MODEL_PATH = "../models/viking_room.obj";
 const std::string TEXTURE_PATH = "../textures/viking_room.png";
 constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 
-const std::vector<char const *> validationLayers = {
-    "VK_LAYER_KHRONOS_validation"};
-
-// #define NDEBUG
-#ifdef NDEBUG
-constexpr bool enableValidationLayers = false;
-#else
-constexpr bool enableValidationLayers = true;
-#endif
+// Application info structure to store profile support flags
+struct AppInfo
+{
+    bool profileSupported = false;
+    VpProfileProperties profile;
+};
 
 struct Vertex
 {
@@ -122,13 +119,13 @@ public:
     }
 
 private:
+    // Setup
     GLFWwindow *window = nullptr;
     vk::raii::Context context;
     vk::raii::Instance instance = nullptr;
     vk::raii::DebugUtilsMessengerEXT debugMessenger = nullptr;
     vk::raii::SurfaceKHR surface = nullptr;
     vk::raii::PhysicalDevice physicalDevice = nullptr;
-    vk::SampleCountFlagBits msaaSamples = vk::SampleCountFlagBits::e1;
     vk::raii::Device device = nullptr;
     uint32_t queueIndex = ~0;
     vk::raii::Queue queue = nullptr;
@@ -138,24 +135,32 @@ private:
     vk::Extent2D swapChainExtent;
     std::vector<vk::raii::ImageView> swapChainImageViews;
 
+    // Rendering
+    vk::raii::RenderPass renderPass = nullptr;
     vk::raii::DescriptorSetLayout descriptorSetLayout = nullptr;
     vk::raii::PipelineLayout pipelineLayout = nullptr;
     vk::raii::Pipeline graphicsPipeline = nullptr;
+    std::vector<vk::raii::Framebuffer> swapChainFramebuffers;
 
+    // MSAA
+    vk::SampleCountFlagBits msaaSamples = vk::SampleCountFlagBits::e1;
     vk::raii::Image colorImage = nullptr;
     vk::raii::DeviceMemory colorImageMemory = nullptr;
     vk::raii::ImageView colorImageView = nullptr;
 
+    // Depth
     vk::raii::Image depthImage = nullptr;
     vk::raii::DeviceMemory depthImageMemory = nullptr;
     vk::raii::ImageView depthImageView = nullptr;
 
+    // Texture
     uint32_t mipLevels = 0;
     vk::raii::Image textureImage = nullptr;
     vk::raii::DeviceMemory textureImageMemory = nullptr;
     vk::raii::ImageView textureImageView = nullptr;
     vk::raii::Sampler textureSampler = nullptr;
 
+    // Vertex and Index Buffers
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
     vk::raii::Buffer vertexBuffer = nullptr;
@@ -163,21 +168,35 @@ private:
     vk::raii::Buffer indexBuffer = nullptr;
     vk::raii::DeviceMemory indexBufferMemory = nullptr;
 
+    // UBO
     std::vector<vk::raii::Buffer> uniformBuffers;
     std::vector<vk::raii::DeviceMemory> uniformBuffersMemory;
     std::vector<void *> uniformBuffersMapped;
 
+    // Descriptors
     vk::raii::DescriptorPool descriptorPool = nullptr;
     std::vector<vk::raii::DescriptorSet> descriptorSets;
 
+    // Commands
     vk::raii::CommandPool commandPool = nullptr;
     std::vector<vk::raii::CommandBuffer> commandBuffers;
 
-    std::vector<vk::raii::Semaphore> presentCompleteSemaphores;
+    // Semaphores and Fences
     std::vector<vk::raii::Semaphore> renderFinishedSemaphores;
     std::vector<vk::raii::Fence> inFlightFences;
+    std::vector<vk::raii::Semaphore> presentCompleteSemaphores;
     uint32_t frameIndex = 0;
 
+    AppInfo appInfo = {};
+
+    struct SwapChainSupportDetails
+    {
+        vk::SurfaceCapabilitiesKHR capabilities;
+        std::vector<vk::SurfaceFormatKHR> formats;
+        std::vector<vk::PresentModeKHR> presentModes;
+    };
+
+    // Resize
     bool framebufferResized = false;
 
     std::vector<const char *> requiredDeviceExtension = {
@@ -205,29 +224,60 @@ private:
 
     void initVulkan()
     {
+        // Setup
         createInstance();
         setupDebugMessenger();
         createSurface();
         pickPhysicalDevice();
-        msaaSamples = getMaxUsableSampleCount();
+        checkFeatureSupport();
         createLogicalDevice();
         createSwapChain();
         createImageViews();
+
+        // Create render pass only if not using dynamic rendering
+        if (!appInfo.profileSupported)
+        {
+            createRenderPass();
+        }
+        // Layout and Pipeline
         createDescriptorSetLayout();
         createGraphicsPipeline();
-        createCommandPool();
+
         createColorResources();
         createDepthResources();
+
+        // Create framebuffers only if not using dynamic rendering
+        if (!appInfo.profileSupported)
+        {
+            createFramebuffers();
+        }
+
+        // CommandPool and resources
+        createCommandPool();
+
+        // Texture
         createTextureImage();
         createTextureImageView();
         createTextureSampler();
+
+        // Models
         loadModel();
+
+        // Vertex and Index Buffer
         createVertexBuffer();
         createIndexBuffer();
+
+        // UBO
         createUniformBuffers();
+
+        // Descriptors
         createDescriptorPool();
         createDescriptorSets();
+
+        // CommandBuffers
         createCommandBuffers();
+
+        // Semaphores and Fences
         createSyncObjects();
     }
 
@@ -243,6 +293,18 @@ private:
 
     void cleanupSwapChain()
     {
+
+        swapChainFramebuffers.clear();
+        swapChainImageViews.clear();
+
+        // Semaphores tied to swapchain image indices need to be rebuilt on resize
+        presentCompleteSemaphores.clear();
+        renderFinishedSemaphores.clear();
+        for (auto &imageView : swapChainImageViews)
+        {
+            imageView = nullptr;
+        }
+
         swapChainImageViews.clear();
         swapChain = nullptr;
     }
@@ -250,7 +312,6 @@ private:
     void cleanup()
     {
         glfwDestroyWindow(window);
-
         glfwTerminate();
     }
 
@@ -269,8 +330,25 @@ private:
         cleanupSwapChain();
         createSwapChain();
         createImageViews();
+
         createColorResources();
         createDepthResources();
+
+        if (!appInfo.profileSupported)
+        {
+            createRenderPass();
+            createFramebuffers();
+        }
+
+        // Recreate per-swapchain-image present semaphores after resize
+        presentCompleteSemaphores.reserve(swapChainImages.size());
+        renderFinishedSemaphores.reserve(swapChainImages.size());
+        vk::SemaphoreCreateInfo semaphoreInfo{};
+        for (size_t i = 0; i < swapChainImages.size(); ++i)
+        {
+            presentCompleteSemaphores.push_back(device.createSemaphore(semaphoreInfo));
+            renderFinishedSemaphores.push_back(device.createSemaphore(semaphoreInfo));
+        }
     }
 
     void createInstance()
@@ -282,66 +360,29 @@ private:
         appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
         appInfo.apiVersion = vk::ApiVersion14;
 
-        // Get the required layers
-        std::vector<char const *> requiredLayers;
-        if (enableValidationLayers)
-        {
-            requiredLayers.assign(validationLayers.begin(), validationLayers.end());
-        }
-
-        // Check if the required layers are supported by the Vulkan implementation.
-        auto layerProperties = context.enumerateInstanceLayerProperties();
-        auto unsupportedLayerIt = std::ranges::find_if(requiredLayers,
-                                                       [&layerProperties](auto const &requiredLayer)
-                                                       {
-                                                           return std::ranges::none_of(layerProperties,
-                                                                                       [requiredLayer](auto const &layerProperty)
-                                                                                       { return strcmp(layerProperty.layerName, requiredLayer) == 0; });
-                                                       });
-        if (unsupportedLayerIt != requiredLayers.end())
-        {
-            throw std::runtime_error("Required layer not supported: " + std::string(*unsupportedLayerIt));
-        }
-
         // Get the required extensions.
-        auto requiredExtensions = getRequiredInstanceExtensions();
+        auto extensions = getRequiredInstanceExtensions();
         // MACOS ONLY MoltenVK portability flag
-        requiredExtensions.push_back(vk::KHRPortabilityEnumerationExtensionName);
-
-        // Check if the required extensions are supported by the Vulkan implementation.
-        auto extensionProperties = context.enumerateInstanceExtensionProperties();
-        auto unsupportedPropertyIt =
-            std::ranges::find_if(requiredExtensions,
-                                 [&extensionProperties](auto const &requiredExtension)
-                                 {
-                                     return std::ranges::none_of(extensionProperties,
-                                                                 [requiredExtension](auto const &extensionProperty)
-                                                                 { return strcmp(extensionProperty.extensionName, requiredExtension) == 0; });
-                                 });
-        if (unsupportedPropertyIt != requiredExtensions.end())
-        {
-            throw std::runtime_error("Required extension not supported: " + std::string(*unsupportedPropertyIt));
-        }
+        extensions.push_back(vk::KHRPortabilityEnumerationExtensionName);
 
         vk::InstanceCreateInfo createInfo{};
         createInfo.pApplicationInfo = &appInfo;
         // Add the portability enumeration flag to enable MoltenVK support on macOS
         createInfo.flags = vk::InstanceCreateFlagBits::eEnumeratePortabilityKHR;
-        createInfo.enabledLayerCount = static_cast<uint32_t>(requiredLayers.size());
-        createInfo.ppEnabledLayerNames = requiredLayers.data();
-        createInfo.enabledExtensionCount = static_cast<uint32_t>(requiredExtensions.size());
-        createInfo.ppEnabledExtensionNames = requiredExtensions.data();
+        createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
+        createInfo.ppEnabledExtensionNames = extensions.data();
 
         instance = vk::raii::Instance(context, createInfo);
     }
 
     void setupDebugMessenger()
     {
-        if (!enableValidationLayers)
-            return;
+        // Always set up the debug messenger
+        // It will only be used if validation layers are enabled via vulkanconfig
 
-        vk::DebugUtilsMessageSeverityFlagsEXT severityFlags(vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning |
-                                                            vk::DebugUtilsMessageSeverityFlagBitsEXT::eError);
+        vk::DebugUtilsMessageSeverityFlagsEXT severityFlags(
+            vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning |
+            vk::DebugUtilsMessageSeverityFlagBitsEXT::eError);
         vk::DebugUtilsMessageTypeFlagsEXT messageTypeFlags(
             vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral | vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance | vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation);
 
@@ -349,7 +390,17 @@ private:
         debugUtilsMessengerCreateInfoEXT.messageSeverity = severityFlags;
         debugUtilsMessengerCreateInfoEXT.messageType = messageTypeFlags;
         debugUtilsMessengerCreateInfoEXT.pfnUserCallback = &debugCallback;
-        debugMessenger = instance.createDebugUtilsMessengerEXT(debugUtilsMessengerCreateInfoEXT);
+
+        try
+        {
+            debugMessenger = instance.createDebugUtilsMessengerEXT(debugUtilsMessengerCreateInfoEXT);
+        }
+        catch (vk::SystemError &err)
+        {
+            // If the debug utils extension is not available, this will fail
+            // That's okay, it just means validation layers aren't enabled
+            std::cout << "Debug messenger not available. Validation layers may not be enabled." << std::endl;
+        }
     }
 
     void createSurface()
@@ -365,7 +416,7 @@ private:
     bool isDeviceSuitable(vk::raii::PhysicalDevice const &physicalDevice)
     {
         // Check if the physicalDevice supports the Vulkan 1.3 API version
-        bool supportsVulkan1_3 = physicalDevice.getProperties().apiVersion >= vk::ApiVersion13;
+        bool supportsVulkan1_3 = physicalDevice.getProperties().apiVersion >= VK_API_VERSION_1_3;
 
         // Check if any of the queue families support graphics operations
         auto queueFamilies = physicalDevice.getQueueFamilyProperties();
@@ -380,31 +431,15 @@ private:
                                 {
                                     return std::ranges::any_of(availableDeviceExtensions,
                                                                [requiredDeviceExtension](auto const &availableDeviceExtension)
-                                                               {
-                                                                   return strcmp(availableDeviceExtension.extensionName, requiredDeviceExtension) == 0;
-                                                               });
+                                                               { return strcmp(availableDeviceExtension.extensionName, requiredDeviceExtension) == 0; });
                                 });
 
-        // Check if the physicalDevice supports the required features
-        auto features = physicalDevice.template getFeatures2<
-            vk::PhysicalDeviceFeatures2,
-            vk::PhysicalDeviceVulkan11Features,
-            vk::PhysicalDeviceVulkan13Features,
-            vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
-        bool supportsRequiredFeatures =
-            features.template get<vk::PhysicalDeviceFeatures2>().features.samplerAnisotropy &&  // Enable anisotropic filtering for better texture quality
-            features.template get<vk::PhysicalDeviceVulkan11Features>().shaderDrawParameters && // Discover why
-            features.template get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering &&
-            features.template get<vk::PhysicalDeviceVulkan13Features>().synchronization2 &&
-            features.template get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>().extendedDynamicState;
-
         // Return true if the physicalDevice meets all the criteria
-        return supportsVulkan1_3 && supportsGraphics && supportsAllRequiredExtensions && supportsRequiredFeatures;
+        return supportsVulkan1_3 && supportsGraphics && supportsAllRequiredExtensions;
     }
 
     void pickPhysicalDevice()
     {
-
         std::vector<vk::raii::PhysicalDevice> physicalDevices = instance.enumeratePhysicalDevices();
         auto const devIter = std::ranges::find_if(physicalDevices, [&](auto const &physicalDevice)
                                                   { return isDeviceSuitable(physicalDevice); });
@@ -413,6 +448,43 @@ private:
             throw std::runtime_error("failed to find a suitable GPU!");
         }
         physicalDevice = *devIter;
+        msaaSamples = getMaxUsableSampleCount();
+
+        // Print device information
+        vk::PhysicalDeviceProperties deviceProperties = physicalDevice.getProperties();
+        std::cout << "Selected GPU: " << deviceProperties.deviceName << std::endl;
+        std::cout << "API Version: " << VK_VERSION_MAJOR(deviceProperties.apiVersion) << "."
+                  << VK_VERSION_MINOR(deviceProperties.apiVersion) << "."
+                  << VK_VERSION_PATCH(deviceProperties.apiVersion) << std::endl;
+    }
+
+    void checkFeatureSupport()
+    {
+        // Define the KHR roadmap 2022 profile - more widely supported than 2024
+        appInfo.profile = {VP_MY_PROFILE_NAME, VP_MY_PROFILE_SPEC_VERSION};
+
+        // Check if the profile is supported
+        VkBool32 supported = vk::False;
+        VkResult result = vpGetPhysicalDeviceProfileSupport(
+            *instance,
+            *physicalDevice,
+            &appInfo.profile,
+            &supported);
+
+        if (result == VK_SUCCESS && supported == vk::True)
+        {
+            appInfo.profileSupported = true;
+            std::cout << "Using custom profile" << std::endl;
+        }
+
+        else
+        {
+            appInfo.profileSupported = false;
+            std::cout << "Falling back to traditional rendering (profile not supported)" << std::endl;
+        }
+
+        // If we wanted to implement fallback, we would call detectFeatureSupport() here
+        // But for this example, we'll just use traditional rendering if the profile isn't supported
     }
 
     void createLogicalDevice()
@@ -435,47 +507,76 @@ private:
             throw std::runtime_error("Could not find a queue for graphics and present -> terminating");
         }
 
-        // query for Vulkan 1.3 features
-        vk::PhysicalDeviceFeatures2 features2{};
-        features2.features.samplerAnisotropy = true; // Enable anisotropic filtering for better texture quality
-
-        vk::PhysicalDeviceVulkan11Features vulkan11Features{};
-        vulkan11Features.shaderDrawParameters = true;
-
-        vk::PhysicalDeviceVulkan13Features vulkan13Features{};
-        vulkan13Features.dynamicRendering = true;
-        vulkan13Features.synchronization2 = true;
-
-        vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT extendedDynamicStateFeatures{};
-        extendedDynamicStateFeatures.extendedDynamicState = true;
-
-        vk::StructureChain<vk::PhysicalDeviceFeatures2,
-                           vk::PhysicalDeviceVulkan11Features,
-                           vk::PhysicalDeviceVulkan13Features,
-                           vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>
-            featureChain = {
-                features2,                   // vk::PhysicalDeviceFeatures2
-                vulkan11Features,            // vk::PhysicalDeviceVulkan11Features
-                vulkan13Features,            // vk::PhysicalDeviceVulkan13Features
-                extendedDynamicStateFeatures // vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT
-            };
-
-        // create a Device
         float queuePriority = 0.5f;
         vk::DeviceQueueCreateInfo deviceQueueCreateInfo{};
         deviceQueueCreateInfo.queueFamilyIndex = queueIndex;
         deviceQueueCreateInfo.queueCount = 1;
         deviceQueueCreateInfo.pQueuePriorities = &queuePriority;
 
-        vk::DeviceCreateInfo deviceCreateInfo{};
-        deviceCreateInfo.pNext = &featureChain.get<vk::PhysicalDeviceFeatures2>();
-        deviceCreateInfo.queueCreateInfoCount = 1;
-        deviceCreateInfo.pQueueCreateInfos = &deviceQueueCreateInfo;
-        deviceCreateInfo.enabledExtensionCount = static_cast<uint32_t>(requiredDeviceExtension.size());
-        deviceCreateInfo.ppEnabledExtensionNames = requiredDeviceExtension.data();
+        if (appInfo.profileSupported)
+        {
 
-        device = vk::raii::Device(physicalDevice, deviceCreateInfo);
-        queue = vk::raii::Queue(device, queueIndex, 0);
+            // Create device with Best Practices Profile
+
+            // Enable required features
+            vk::PhysicalDeviceFeatures2 features2;
+            vk::PhysicalDeviceFeatures deviceFeatures{};
+            deviceFeatures.samplerAnisotropy = vk::True;
+            deviceFeatures.sampleRateShading = vk::True;
+            features2.features = deviceFeatures;
+
+            // Enable dynamic rendering
+            vk::PhysicalDeviceDynamicRenderingFeatures dynamicRenderingFeatures;
+            dynamicRenderingFeatures.dynamicRendering = vk::True;
+
+            // Enable synchronization2
+            vk::PhysicalDeviceSynchronization2Features synchronization2Features;
+            synchronization2Features.synchronization2 = vk::True;
+
+            // Chain them together: features2 -> dynamicRenderingFeatures -> synchronization2Features
+            features2.pNext = &dynamicRenderingFeatures;
+            dynamicRenderingFeatures.pNext = &synchronization2Features;
+
+            // Create a vk::DeviceCreateInfo with the required features
+            vk::DeviceCreateInfo deviceCreateInfo{};
+            deviceCreateInfo.pNext = &features2;
+            deviceCreateInfo.queueCreateInfoCount = 1;
+            deviceCreateInfo.pQueueCreateInfos = &deviceQueueCreateInfo;
+            deviceCreateInfo.enabledExtensionCount = static_cast<uint32_t>(requiredDeviceExtension.size());
+            deviceCreateInfo.ppEnabledExtensionNames = requiredDeviceExtension.data();
+            // Create the device with the vk::DeviceCreateInfo
+            device = vk::raii::Device(physicalDevice, deviceCreateInfo);
+
+            std::cout << " Created logical device using custom profile" << std::endl;
+        }
+        else
+        {
+            // Fallback to manual device creation
+            // Enable required features
+            vk::PhysicalDeviceFeatures2 features2;
+            vk::PhysicalDeviceFeatures deviceFeatures{};
+            deviceFeatures.samplerAnisotropy = vk::True;
+            deviceFeatures.sampleRateShading = vk::True;
+            features2.features = deviceFeatures;
+
+            // Incomplete fallback since still using PipelineBarrier2 that requires synchronization2
+            // Enable synchronization2
+            vk::PhysicalDeviceSynchronization2Features synchronization2Features;
+            synchronization2Features.synchronization2 = vk::True;
+            features2.pNext = &synchronization2Features;
+
+            vk::DeviceCreateInfo deviceCreateInfo{};
+            deviceCreateInfo.queueCreateInfoCount = 1;
+            deviceCreateInfo.pQueueCreateInfos = &deviceQueueCreateInfo;
+            deviceCreateInfo.enabledExtensionCount = static_cast<uint32_t>(requiredDeviceExtension.size());
+            deviceCreateInfo.ppEnabledExtensionNames = requiredDeviceExtension.data();
+            deviceCreateInfo.pNext = &features2;
+
+            device = vk::raii::Device(physicalDevice, deviceCreateInfo);
+
+            std::cout << " Created logical device using manual feature selection" << std::endl;
+        }
+        queue = device.getQueue(queueIndex, 0);
     }
 
     void createSwapChain()
@@ -517,6 +618,79 @@ private:
         {
             swapChainImageViews.emplace_back(createImageView(image, swapChainSurfaceFormat.format, vk::ImageAspectFlagBits::eColor, 1));
         }
+    }
+
+    void createRenderPass()
+    {
+        // This is only called if the Best Practices profile is not supported
+        // or if dynamic rendering is not available
+        vk::AttachmentDescription colorAttachment{};
+        colorAttachment.format = swapChainSurfaceFormat.format;
+        colorAttachment.samples = msaaSamples;
+        colorAttachment.loadOp = vk::AttachmentLoadOp::eClear;
+        colorAttachment.storeOp = vk::AttachmentStoreOp::eDontCare;
+        colorAttachment.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
+        colorAttachment.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+        colorAttachment.initialLayout = vk::ImageLayout::eUndefined;
+        colorAttachment.finalLayout = vk::ImageLayout::eColorAttachmentOptimal;
+
+        vk::AttachmentDescription depthAttachment{};
+        depthAttachment.format = findDepthFormat(),
+        depthAttachment.samples = msaaSamples,
+        depthAttachment.loadOp = vk::AttachmentLoadOp::eClear;
+        depthAttachment.storeOp = vk::AttachmentStoreOp::eDontCare;
+        depthAttachment.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
+        depthAttachment.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+        depthAttachment.initialLayout = vk::ImageLayout::eUndefined;
+        depthAttachment.finalLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+
+        vk::AttachmentDescription colorAttachmentResolve{};
+        colorAttachmentResolve.format = swapChainSurfaceFormat.format;
+        colorAttachmentResolve.samples = vk::SampleCountFlagBits::e1;
+        colorAttachmentResolve.loadOp = vk::AttachmentLoadOp::eDontCare;
+        colorAttachmentResolve.storeOp = vk::AttachmentStoreOp::eStore;
+        colorAttachmentResolve.stencilLoadOp = vk::AttachmentLoadOp::eDontCare;
+        colorAttachmentResolve.stencilStoreOp = vk::AttachmentStoreOp::eDontCare;
+        colorAttachmentResolve.initialLayout = vk::ImageLayout::eUndefined;
+        colorAttachmentResolve.finalLayout = vk::ImageLayout::ePresentSrcKHR;
+
+        vk::AttachmentReference colorAttachmentRef{};
+        colorAttachmentRef.attachment = 0;
+        colorAttachmentRef.layout = vk::ImageLayout::eColorAttachmentOptimal;
+
+        vk::AttachmentReference depthAttachmentRef{};
+        depthAttachmentRef.attachment = 1;
+        depthAttachmentRef.layout = vk::ImageLayout::eDepthStencilAttachmentOptimal;
+
+        vk::AttachmentReference colorAttachmentResolveRef{};
+        colorAttachmentResolveRef.attachment = 2,
+        colorAttachmentResolveRef.layout = vk::ImageLayout::eColorAttachmentOptimal;
+
+        vk::SubpassDescription subpass{};
+        subpass.pipelineBindPoint = vk::PipelineBindPoint::eGraphics;
+        subpass.colorAttachmentCount = 1;
+        subpass.pColorAttachments = &colorAttachmentRef;
+        subpass.pResolveAttachments = &colorAttachmentResolveRef;
+        subpass.pDepthStencilAttachment = &depthAttachmentRef;
+
+        vk::SubpassDependency dependency{};
+        dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+        dependency.dstSubpass = 0;
+        dependency.srcStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests;
+        dependency.dstStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput | vk::PipelineStageFlagBits::eEarlyFragmentTests;
+        dependency.srcAccessMask = vk::AccessFlagBits::eNone;
+        dependency.dstAccessMask = vk::AccessFlagBits::eColorAttachmentWrite | vk::AccessFlagBits::eDepthStencilAttachmentWrite;
+
+        std::array<vk::AttachmentDescription, 3> attachments = {colorAttachment, depthAttachment, colorAttachmentResolve};
+        vk::RenderPassCreateInfo renderPassInfo{};
+        renderPassInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+        renderPassInfo.pAttachments = attachments.data();
+        renderPassInfo.subpassCount = 1;
+        renderPassInfo.pSubpasses = &subpass;
+        renderPassInfo.dependencyCount = 1;
+        renderPassInfo.pDependencies = &dependency;
+
+        renderPass = device.createRenderPass(renderPassInfo);
     }
 
     void createDescriptorSetLayout()
@@ -566,6 +740,8 @@ private:
 
         vk::PipelineInputAssemblyStateCreateInfo inputAssembly{};
         inputAssembly.topology = vk::PrimitiveTopology::eTriangleList;
+        inputAssembly.primitiveRestartEnable = vk::False;
+
         vk::PipelineViewportStateCreateInfo viewportState{};
         viewportState.viewportCount = 1;
         viewportState.scissorCount = 1;
@@ -581,7 +757,8 @@ private:
 
         vk::PipelineMultisampleStateCreateInfo multisampling{};
         multisampling.rasterizationSamples = msaaSamples;
-        multisampling.sampleShadingEnable = vk::False;
+        multisampling.sampleShadingEnable = vk::True;
+        multisampling.minSampleShading = 0.2f;
 
         vk::PipelineDepthStencilStateCreateInfo depthStencil{};
         depthStencil.depthTestEnable = vk::True;
@@ -609,8 +786,10 @@ private:
         pipelineLayoutInfo.setLayoutCount = 1;
         pipelineLayoutInfo.pSetLayouts = &*descriptorSetLayout;
         pipelineLayoutInfo.pushConstantRangeCount = 0;
-        pipelineLayout = vk::raii::PipelineLayout(device, pipelineLayoutInfo);
+        pipelineLayout = device.createPipelineLayout(pipelineLayoutInfo);
 
+        // Configure pipeline based on whether we're using the KHR roadmap 2022 profile
+        // With the KHR roadmap 2022 profile, we can use dynamic rendering
         vk::GraphicsPipelineCreateInfo pipelineCreateInfo{};
         pipelineCreateInfo.stageCount = 2;
         pipelineCreateInfo.pStages = shaderStages;
@@ -636,7 +815,43 @@ private:
             pipelineRenderingCreateInfo // vk::PipelineRenderingCreateInfo
         };
 
+        if (appInfo.profileSupported)
+        {
+            std::cout << "Creating pipeline with dynamic rendering (custom profile)" << std::endl;
+        }
+        else
+        {
+            std::cout << "Creating pipeline with traditional renderpass (fallback)" << std::endl;
+            pipelineCreateInfoChain.unlink<vk::PipelineRenderingCreateInfo>();
+            pipelineCreateInfoChain.get<vk::GraphicsPipelineCreateInfo>().renderPass = *renderPass;
+        }
+
         graphicsPipeline = vk::raii::Pipeline(device, nullptr, pipelineCreateInfoChain.get<vk::GraphicsPipelineCreateInfo>());
+    }
+
+    void createFramebuffers()
+    {
+        // This is only called if the Best Practices profile is not supported
+        // or if dynamic rendering is not available
+        swapChainFramebuffers.reserve(swapChainImageViews.size());
+
+        for (size_t i = 0; i < swapChainImageViews.size(); i++)
+        {
+            std::array<vk::ImageView, 3> attachments = {
+                *colorImageView,
+                *depthImageView,
+                *swapChainImageViews[i]};
+
+            vk::FramebufferCreateInfo framebufferInfo{};
+            framebufferInfo.renderPass = *renderPass;
+            framebufferInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+            framebufferInfo.pAttachments = attachments.data();
+            framebufferInfo.width = swapChainExtent.width;
+            framebufferInfo.height = swapChainExtent.height;
+            framebufferInfo.layers = 1;
+
+            swapChainFramebuffers.push_back(device.createFramebuffer(framebufferInfo));
+        }
     }
 
     void createCommandPool()
@@ -1176,16 +1391,10 @@ private:
         auto &commandBuffer = commandBuffers[frameIndex];
         commandBuffer.begin({});
 
+        // Transition the attachments to the correct layouts for dynamic rendering
+
         // Before starting rendering, transition the swapchain image to vk::ImageLayout::eColorAttachmentOptimal
-        transition_image_layout(
-            swapChainImages[imageIndex],
-            vk::ImageLayout::eUndefined,
-            vk::ImageLayout::eColorAttachmentOptimal,
-            {},
-            vk::AccessFlagBits2::eColorAttachmentWrite,
-            vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-            vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-            vk::ImageAspectFlagBits::eColor);
+        // 1) Multisampled color attachment image -> ColorAttachmentOptimal
 
         // Transition the multisampled color image to color attachment optimal layout
         transition_image_layout(
@@ -1198,9 +1407,9 @@ private:
             vk::PipelineStageFlagBits2::eColorAttachmentOutput,
             vk::ImageAspectFlagBits::eColor);
 
-        // Transition depth image to depth attachment optimal layout
+        // 2) Depth attachment image -> DepthStencilAttachmentOptimal
         transition_image_layout(
-            depthImage,
+            *depthImage,
             vk::ImageLayout::eUndefined,
             vk::ImageLayout::eDepthStencilAttachmentOptimal,
             vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
@@ -1209,35 +1418,66 @@ private:
             vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
             vk::ImageAspectFlagBits::eDepth);
 
-        vk::ClearValue clearColor = vk::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
+        // 3) Resolve (swapchain) image -> ColorAttachmentOptimal
+        transition_image_layout(
+            swapChainImages[imageIndex],
+            vk::ImageLayout::eUndefined,
+            vk::ImageLayout::eColorAttachmentOptimal,
+            {},                                                 // srcAccessMask (no need to wait for previous operations)
+            vk::AccessFlagBits2::eColorAttachmentWrite,         // dstAccessMask
+            vk::PipelineStageFlagBits2::eColorAttachmentOutput, // srcStage
+            vk::PipelineStageFlagBits2::eColorAttachmentOutput, // dstStage
+            vk::ImageAspectFlagBits::eColor);
+
+        // Clear values for color and depth
+        vk::ClearValue clearColor = vk::ClearColorValue(std::array<float, 4>{0.0f, 0.0f, 0.0f, 1.0f});
         vk::ClearValue clearDepth = vk::ClearDepthStencilValue(1.0f, 0);
+        std::array<vk::ClearValue, 2> clearValues = {clearColor, clearDepth};
 
-        // Color attachment (multisampled) with resolve attachment
-        vk::RenderingAttachmentInfo colorAttachmentInfo = {};
-        colorAttachmentInfo.imageView = colorImageView;
-        colorAttachmentInfo.imageLayout = vk::ImageLayout::eColorAttachmentOptimal;
-        colorAttachmentInfo.resolveImageView = swapChainImageViews[imageIndex];
-        colorAttachmentInfo.resolveImageLayout = vk::ImageLayout::eColorAttachmentOptimal;
-        colorAttachmentInfo.loadOp = vk::AttachmentLoadOp::eClear;
-        colorAttachmentInfo.storeOp = vk::AttachmentStoreOp::eStore;
-        colorAttachmentInfo.clearValue = clearColor;
+        // Use different rendering approach based on profile support
+        if (appInfo.profileSupported)
+        {
+            // Use dynamic rendering with the KHR roadmap 2022 profile
+            vk::RenderingAttachmentInfo colorAttachmentInfo = {};
+            colorAttachmentInfo.imageView = colorImageView;
+            colorAttachmentInfo.imageLayout = vk::ImageLayout::eColorAttachmentOptimal;
+            colorAttachmentInfo.resolveImageView = swapChainImageViews[imageIndex];
+            colorAttachmentInfo.resolveImageLayout = vk::ImageLayout::eColorAttachmentOptimal;
+            colorAttachmentInfo.loadOp = vk::AttachmentLoadOp::eClear;
+            colorAttachmentInfo.storeOp = vk::AttachmentStoreOp::eStore;
+            colorAttachmentInfo.clearValue = clearColor;
 
-        vk::RenderingAttachmentInfo depthAttachmentInfo = {};
-        depthAttachmentInfo.imageView = depthImageView;
-        depthAttachmentInfo.imageLayout = vk::ImageLayout::eDepthAttachmentOptimal;
-        depthAttachmentInfo.loadOp = vk::AttachmentLoadOp::eClear;
-        depthAttachmentInfo.storeOp = vk::AttachmentStoreOp::eDontCare;
-        depthAttachmentInfo.clearValue = clearDepth;
+            vk::RenderingAttachmentInfo depthAttachmentInfo = {};
+            depthAttachmentInfo.imageView = depthImageView;
+            depthAttachmentInfo.imageLayout = vk::ImageLayout::eDepthAttachmentOptimal;
+            depthAttachmentInfo.loadOp = vk::AttachmentLoadOp::eClear;
+            depthAttachmentInfo.storeOp = vk::AttachmentStoreOp::eDontCare;
+            depthAttachmentInfo.clearValue = clearDepth;
 
-        vk::RenderingInfo renderingInfo = {};
-        renderingInfo.renderArea.offset = {.x = 0, .y = 0};
-        renderingInfo.renderArea.extent = swapChainExtent;
-        renderingInfo.layerCount = 1;
-        renderingInfo.colorAttachmentCount = 1;
-        renderingInfo.pColorAttachments = &colorAttachmentInfo;
-        renderingInfo.pDepthAttachment = &depthAttachmentInfo;
+            vk::RenderingInfo renderingInfo = {};
+            renderingInfo.renderArea.offset = {.x = 0, .y = 0};
+            renderingInfo.renderArea.extent = swapChainExtent;
+            renderingInfo.layerCount = 1;
+            renderingInfo.colorAttachmentCount = 1;
+            renderingInfo.pColorAttachments = &colorAttachmentInfo;
+            renderingInfo.pDepthAttachment = &depthAttachmentInfo;
 
-        commandBuffer.beginRendering(renderingInfo);
+            commandBuffer.beginRendering(renderingInfo);
+        }
+        else
+        {
+            // Use traditional render pass if not using the KHR roadmap 2022 profile
+            vk::RenderPassBeginInfo renderPassInfo{};
+            renderPassInfo.renderPass = *renderPass;
+            renderPassInfo.framebuffer = *swapChainFramebuffers[imageIndex];
+            renderPassInfo.renderArea.offset = {.x = 0, .y = 0};
+            renderPassInfo.renderArea.extent = swapChainExtent;
+            renderPassInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
+            renderPassInfo.pClearValues = clearValues.data();
+
+            commandBuffer.beginRenderPass(renderPassInfo, vk::SubpassContents::eInline);
+        }
+
         commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *graphicsPipeline);
         commandBuffer.setViewport(0, vk::Viewport(0.0f, 0.0f, static_cast<float>(swapChainExtent.width), static_cast<float>(swapChainExtent.height), 0.0f, 1.0f));
         commandBuffer.setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swapChainExtent));
@@ -1245,18 +1485,28 @@ private:
         commandBuffer.bindIndexBuffer(*indexBuffer, 0, vk::IndexTypeValue<decltype(indices)::value_type>::value);
         commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout, 0, *descriptorSets[frameIndex], nullptr);
         commandBuffer.drawIndexed(static_cast<uint32_t>(indices.size()), 1, 0, 0, 0);
-        commandBuffer.endRendering();
 
-        // After rendering, transition the swapchain image to vk::ImageLayout::ePresentSrcKHR
-        transition_image_layout(
-            swapChainImages[imageIndex],
-            vk::ImageLayout::eColorAttachmentOptimal,
-            vk::ImageLayout::ePresentSrcKHR,
-            vk::AccessFlagBits2::eColorAttachmentWrite,
-            {},
-            vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-            vk::PipelineStageFlagBits2::eBottomOfPipe,
-            vk::ImageAspectFlagBits::eColor);
+        if (appInfo.profileSupported)
+        {
+            commandBuffer.endRendering();
+
+            // After rendering, transition the swapchain image to vk::ImageLayout::ePresentSrcKHR
+            transition_image_layout(
+                swapChainImages[imageIndex],
+                vk::ImageLayout::eColorAttachmentOptimal,
+                vk::ImageLayout::ePresentSrcKHR,
+                vk::AccessFlagBits2::eColorAttachmentWrite,
+                {},
+                vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                vk::PipelineStageFlagBits2::eBottomOfPipe,
+                vk::ImageAspectFlagBits::eColor);
+        }
+        else
+        {
+            commandBuffer.endRenderPass();
+            // Traditional render pass already transitions the image to the correct layout
+        }
+
         commandBuffer.end();
     }
 
@@ -1296,18 +1546,21 @@ private:
 
     void createSyncObjects()
     {
+        renderFinishedSemaphores.reserve(MAX_FRAMES_IN_FLIGHT);
+        inFlightFences.reserve(MAX_FRAMES_IN_FLIGHT);
+        presentCompleteSemaphores.reserve(swapChainImages.size());
 
-        assert(presentCompleteSemaphores.empty() && renderFinishedSemaphores.empty() && inFlightFences.empty());
-        for (size_t i = 0; i < swapChainImages.size(); i++)
-        {
-            renderFinishedSemaphores.emplace_back(device, vk::SemaphoreCreateInfo());
-        }
+        vk::SemaphoreCreateInfo semaphoreInfo{};
+        vk::FenceCreateInfo fenceInfo(vk::FenceCreateFlagBits::eSignaled);
+
         for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
         {
-            presentCompleteSemaphores.emplace_back(device, vk::SemaphoreCreateInfo());
-            vk::FenceCreateInfo fenceCreateInfo{};
-            fenceCreateInfo.flags = vk::FenceCreateFlagBits::eSignaled;
-            inFlightFences.emplace_back(device, fenceCreateInfo);
+            inFlightFences.push_back(device.createFence(fenceInfo));
+        }
+        for (size_t i = 0; i < swapChainImages.size(); i++)
+        {
+            renderFinishedSemaphores.push_back(device.createSemaphore(semaphoreInfo));
+            presentCompleteSemaphores.push_back(device.createSemaphore(semaphoreInfo));
         }
     }
 
@@ -1328,6 +1581,7 @@ private:
 
     void drawFrame()
     {
+
         // Note: inFlightFences, presentCompleteSemaphores, and commandBuffers are indexed by frameIndex,
         //       while renderFinishedSemaphores is indexed by imageIndex
         auto fenceResult = device.waitForFences(*inFlightFences[frameIndex], vk::True, UINT64_MAX);
@@ -1361,9 +1615,6 @@ private:
         commandBuffers[frameIndex].reset();
         recordCommandBuffer(imageIndex);
 
-        queue.waitIdle(); // NOTE: for simplicity, wait for the queue to be idle before starting the frame
-        // In the next chapter you see how to use multiple frames in flight and fences to sync
-
         vk::PipelineStageFlags waitDestionationStageMask = vk::PipelineStageFlagBits::eColorAttachmentOutput;
         vk::SubmitInfo submitInfo{};
         submitInfo.waitSemaphoreCount = 1;
@@ -1373,7 +1624,6 @@ private:
         submitInfo.pCommandBuffers = &*commandBuffers[frameIndex];
         submitInfo.signalSemaphoreCount = 1;
         submitInfo.pSignalSemaphores = &*renderFinishedSemaphores[imageIndex];
-
         queue.submit(submitInfo, *inFlightFences[frameIndex]);
 
         vk::PresentInfoKHR presentInfoKHR{};
@@ -1461,13 +1711,23 @@ private:
     {
         uint32_t glfwExtensionCount = 0;
         auto glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
-
         std::vector extensions(glfwExtensions, glfwExtensions + glfwExtensionCount);
-        if (enableValidationLayers)
+
+        // Check if the debug utils extension is available
+        std::vector<vk::ExtensionProperties> props = context.enumerateInstanceExtensionProperties();
+        bool debugUtilsAvailable = std::ranges::any_of(props, [](vk::ExtensionProperties const &ep)
+                                                       { return strcmp(ep.extensionName, vk::EXTDebugUtilsExtensionName) == 0; });
+
+        // Always include the debug utils extension if available
+        // This allows validation layers to be enabled via vulkanconfig
+        if (debugUtilsAvailable)
         {
             extensions.push_back(vk::EXTDebugUtilsExtensionName);
         }
-
+        else
+        {
+            std::cout << "VK_EXT_debug_utils extension not available. Validation layers may not work." << std::endl;
+        }
         return extensions;
     }
 
