@@ -2,6 +2,7 @@
 /build
 /textures/*
 /models/*
+/profiles/vulkan_profiles.hpp
 .editorconfig
 .DS_Store
 .vscode
