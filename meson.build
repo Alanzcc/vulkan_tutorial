@@ -6,11 +6,30 @@ project(
   default_options : ['warning_level=3', 'cpp_std=c++23'],
 )
 
-# External Libraries
+cmake = import('cmake')
+
+fastgltf_sub = cmake.subproject('fastgltf')
+fastgltf_dep = fastgltf_sub.dependency('fastgltf')
+
+ktx_opts = cmake.subproject_options()
+ktx_opts.add_cmake_defines({
+  'KTX_FEATURE_VULKAN':    true,
+  'KTX_FEATURE_GL_UPLOAD': false,
+  'KTX_FEATURE_TOOLS':     false,
+  'KTX_FEATURE_TESTS':     false,
+  'KTX_FEATURE_DOC':       false,
+  'BUILD_SHARED_LIBS':     false,
+})
+
+ktx_sub = cmake.subproject('KTX-Software', options: ktx_opts)
+ktx_dep = ktx_sub.dependency('ktx')
+
 dependencies = [
   dependency('vulkan', required : true),
   dependency('glfw3', modules: ['glfw']),
   dependency('glm', required : true),
+  fastgltf_dep,
+  ktx_dep,
 ]
 
 # Shader Compilation

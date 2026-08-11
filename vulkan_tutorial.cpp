@@ -1,3 +1,4 @@
+// STL
 #include <algorithm>
 #include <array>
 #include <assert.h>
@@ -12,29 +13,32 @@
 #include <chrono>
 #include <unordered_map>
 
+// Graphics API
 #define VK_ENABLE_BETA_EXTENSIONS
 #include <vulkan/vulkan_raii.hpp>
 #include "profiles/vulkan_profiles.hpp"
 
+// Window manager
 #define GLFW_INCLUDE_VULKAN // REQUIRED only for GLFW CreateWindowSurface.
 #include <GLFW/glfw3.h>
 
+// GLM
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #define GLM_ENABLE_EXPERIMENTAL
 #include <glm/gtx/hash.hpp>
 
-#define TINYOBJLOADER_IMPLEMENTATION
-#include "tiny_obj_loader.h"
-
-#define STB_IMAGE_IMPLEMENTATION
-#include <stb_image.h>
+#include <fastgltf/core.hpp>
+#include <fastgltf/tools.hpp>
+#include <fastgltf/glm_element_traits.hpp> // lets iterateAccessor decode straight into glm::vec3/vec2
+// Texture loader
+#include <ktx.h>
 
 constexpr uint32_t WIDTH = 800;
 constexpr uint32_t HEIGHT = 600;
-const std::string MODEL_PATH = "../models/viking_room.obj";
-const std::string TEXTURE_PATH = "../textures/viking_room.png";
+const std::filesystem::path MODEL_PATH = "../assets/models/untitled.glb";
+const std::string TEXTURE_PATH = "../assets/textures/viking_room.ktx2";
 constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 
 // Application info structure to store profile support flags
@@ -154,7 +158,7 @@ private:
     vk::raii::ImageView depthImageView = nullptr;
 
     // Texture
-    uint32_t mipLevels = 0;
+    uint32_t mipLevels = 1;
     vk::raii::Image textureImage = nullptr;
     vk::raii::DeviceMemory textureImageMemory = nullptr;
     vk::raii::ImageView textureImageView = nullptr;
@@ -930,35 +934,51 @@ private:
 
     void createTextureImage()
     {
-        int texWidth, texHeight, texChannels;
-        stbi_uc *pixels = stbi_load(TEXTURE_PATH.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);
-        vk::DeviceSize imageSize = texWidth * texHeight * 4;
-        mipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(texWidth, texHeight)))) + 1;
+        // Load KTX texture instead of using stb_image
+        ktxTexture *kTexture;
+        KTX_error_code result = ktxTexture_CreateFromNamedFile(
+            TEXTURE_PATH.c_str(),
+            KTX_TEXTURE_CREATE_LOAD_IMAGE_DATA_BIT,
+            &kTexture);
 
-        if (!pixels)
+        if (result != KTX_SUCCESS)
         {
             throw std::runtime_error("failed to load texture image!");
         }
 
+        // Get texture dimensions and data
+        uint32_t texWidth = kTexture->baseWidth;
+        uint32_t texHeight = kTexture->baseHeight;
+        ktx_size_t imageSize = ktxTexture_GetImageSize(kTexture, 0);
+        ktx_uint8_t *ktxTextureData = ktxTexture_GetData(kTexture);
+
+        // Create staging buffer and copy texture data to it
         auto [stagingBuffer, stagingBufferMemory] =
             createBuffer(imageSize, vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent);
         void *data = stagingBufferMemory.mapMemory(0, imageSize);
-        std::memcpy(data, pixels, imageSize);
+        std::memcpy(data, ktxTextureData, imageSize);
         stagingBufferMemory.unmapMemory();
 
-        stbi_image_free(pixels);
+        // Determine the Vulkan format from KTX format
+        vk::Format textureFormat = vk::Format::eR8G8B8A8Srgb; // Default format, should be determined from KTX metadata
 
+        // Create the texture image
         std::tie(textureImage, textureImageMemory) = createImage(texWidth,
                                                                  texHeight,
                                                                  mipLevels,
                                                                  vk::SampleCountFlagBits::e1,
-                                                                 vk::Format::eR8G8B8A8Srgb,
+                                                                 textureFormat,
                                                                  vk::ImageTiling::eOptimal,
                                                                  vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
                                                                  vk::MemoryPropertyFlagBits::eDeviceLocal);
+
+        // Copy data from staging buffer to texture image and generate mipmaps
         transitionImageLayout(textureImage, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal, mipLevels);
         copyBufferToImage(stagingBuffer, textureImage, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
-        generateMipmaps(textureImage, vk::Format::eR8G8B8A8Srgb, texWidth, texHeight, mipLevels);
+        generateMipmaps(textureImage, textureFormat, texWidth, texHeight, mipLevels);
+
+        // Clean up KTX resources
+        ktxTexture_Destroy(kTexture);
     }
 
     void generateMipmaps(vk::raii::Image &image, vk::Format imageFormat, int32_t texWidth, int32_t texHeight, uint32_t mipLevels)
@@ -1181,42 +1201,73 @@ private:
 
     void loadModel()
     {
-        tinyobj::attrib_t attrib;
-        std::vector<tinyobj::shape_t> shapes;
-        std::vector<tinyobj::material_t> materials;
-        std::string warn, err;
+        fastgltf::Parser parser;
 
-        if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, MODEL_PATH.c_str()))
+        auto data = fastgltf::GltfDataBuffer::FromPath(MODEL_PATH);
+        if (data.error() != fastgltf::Error::None)
+            throw std::runtime_error("Failed to read glTF file: " + std::string(MODEL_PATH));
+
+        auto assetResult = parser.loadGltfBinary(data.get(), MODEL_PATH.parent_path(),
+                                                 fastgltf::Options::LoadExternalBuffers |
+                                                     fastgltf::Options::GenerateMeshIndices);
+
+        if (assetResult.error() != fastgltf::Error::None)
+            throw std::runtime_error("Failed to parse glTF: " +
+                                     std::string(fastgltf::getErrorMessage(assetResult.error())));
+
+        fastgltf::Asset &model = assetResult.get();
+
+        vertices.clear();
+        indices.clear();
+
+        for (const auto &mesh : model.meshes)
         {
-            throw std::runtime_error(warn + err);
-        }
-
-        std::unordered_map<Vertex, uint32_t> uniqueVertices{};
-
-        for (const auto &shape : shapes)
-        {
-            for (const auto &index : shape.mesh.indices)
+            for (const auto &primitive : mesh.primitives)
             {
-                Vertex vertex{};
+                uint32_t baseVertex = static_cast<uint32_t>(vertices.size());
 
-                vertex.pos = {
-                    attrib.vertices[3 * index.vertex_index + 0],
-                    attrib.vertices[3 * index.vertex_index + 1],
-                    attrib.vertices[3 * index.vertex_index + 2]};
+                // --- Positions (required) ---
+                auto posAttr = primitive.findAttribute("POSITION");
+                if (posAttr == primitive.attributes.end())
+                    throw std::runtime_error("glTF primitive missing POSITION attribute");
 
-                vertex.texCoord = {
-                    attrib.texcoords[2 * index.texcoord_index + 0],
-                    1.0f - attrib.texcoords[2 * index.texcoord_index + 1]};
+                auto &posAccessor = model.accessors[posAttr->accessorIndex];
+                vertices.resize(vertices.size() + posAccessor.count);
 
-                vertex.color = {1.0f, 1.0f, 1.0f};
+                fastgltf::iterateAccessorWithIndex<glm::vec3>(model, posAccessor,
+                                                              [&](glm::vec3 pos, size_t idx)
+                                                              {
+                                                                  // glTF: right-handed, Y-up. Vulkan clip space: Y-down.
+                                                                  Vertex &v = vertices[baseVertex + idx];
+                                                                  v.pos = glm::vec3(pos.x, -pos.y, pos.z);
+                                                                  v.color = glm::vec3(1.0f);
+                                                                  v.texCoord = glm::vec2(0.0f);
+                                                              });
 
-                auto [it, inserted] = uniqueVertices.insert({vertex, static_cast<uint32_t>(vertices.size())});
-                if (inserted)
+                // --- UVs (optional) ---
+                if (auto uvAttr = primitive.findAttribute("TEXCOORD_0"); uvAttr != primitive.attributes.end())
                 {
-                    vertices.push_back(vertex);
+                    auto &uvAccessor = model.accessors[uvAttr->accessorIndex];
+                    fastgltf::iterateAccessorWithIndex<glm::vec2>(model, uvAccessor,
+                                                                  [&](glm::vec2 uv, size_t idx)
+                                                                  {
+                                                                      vertices[baseVertex + idx].texCoord = uv;
+                                                                  });
                 }
 
-                indices.push_back(it->second);
+                // --- Indices (required) ---
+                if (!primitive.indicesAccessor.has_value())
+                    throw std::runtime_error("glTF primitive missing indices");
+
+                auto &indexAccessor = model.accessors[primitive.indicesAccessor.value()];
+                indices.reserve(indices.size() + indexAccessor.count);
+
+                // fastgltf transparently widens ubyte/ushort/uint index accessors to uint32_t here.
+                fastgltf::iterateAccessor<uint32_t>(model, indexAccessor,
+                                                    [&](uint32_t index)
+                                                    {
+                                                        indices.push_back(baseVertex + index);
+                                                    });
             }
         }
     }

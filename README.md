@@ -1,11 +1,13 @@
 # Project Dependencies:
 
 - C++23
+- Meson
+- pkg-config
 - Vulkan 1.4
 - GLFW3
 - GLM
-
-### tiny_obj_loader and stb_image already included in project files
+- glTF
+- KTX2
 
 ## OS used: MacOS
 

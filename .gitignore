@@ -1,5 +1,7 @@
+/terminal_commands
 /bin
 /build
+/assets/*
 /textures/*
 /models/*
 /profiles/vulkan_profiles.hpp
@@ -7,3 +9,5 @@
 .DS_Store
 .vscode
 *.spv
+/subprojects/fastgltf/
+/subprojects/KTX-Software

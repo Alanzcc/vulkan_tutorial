@@ -1,0 +1,4 @@
+[wrap-git]
+url = https://github.com/spnda/fastgltf.git
+revision = v0.8.0
+depth = 1
