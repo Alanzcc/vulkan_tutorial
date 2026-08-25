@@ -270,7 +270,7 @@ private:
 
     createUVBuffer();
     createAccelerationStructures();
-    createInstanceLUTBuffer();
+    // createInstanceLUTBuffer();
 
     createUniformBuffers();
     createDescriptorPool();
@@ -1443,7 +1443,7 @@ private:
 
       std::array<vk::WriteDescriptorSet, 4> descriptorWrites{
           bufferWrite, asWrite, indexBufferWrite, uvBufferWrite};
-      device.updateDescriptorSets(bufferWrite, {});
+      device.updateDescriptorSets(descriptorWrites, {});
     }
 
     // Material descriptor sets (per material)
@@ -1710,6 +1710,8 @@ private:
     std::memcpy(uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
   }
 
+  void updateTopLevelAS(const glm::mat4 &model) {}
+
   void drawFrame() {
     // Note: inFlightFences, presentCompleteSemaphores, and commandBuffers
     // are indexed by frameIndex,
@@ -1891,16 +1893,16 @@ private:
     file.close();
     return buffer;
   }
-
-  int main() {
-    try {
-      HelloTriangleApplication app;
-      app.run();
-    } catch (const std::exception &e) {
-      std::cerr << e.what() << std::endl;
-      return EXIT_FAILURE;
-    }
-
-    return EXIT_SUCCESS;
-  }
 };
+
+int main() {
+  try {
+    HelloTriangleApplication app;
+    app.run();
+  } catch (const std::exception &e) {
+    std::cerr << e.what() << std::endl;
+    return EXIT_FAILURE;
+  }
+
+  return EXIT_SUCCESS;
+}
