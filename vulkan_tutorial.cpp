@@ -1,4 +1,3 @@
-#include "vulkan/vulkan.hpp"
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -16,7 +15,6 @@
 #include <vector>
 
 #define VK_ENABLE_BETA_EXTENSIONS
-#include <vulkan/vulkan.hpp>
 #include <vulkan/vulkan_raii.hpp>
 
 #define GLFW_INCLUDE_VULKAN // REQUIRED only for GLFW CreateWindowSurface.
@@ -1482,8 +1480,9 @@ private:
     std::vector<vk::DescriptorImageInfo> imageInfos;
     imageInfos.reserve(textureImageViews.size());
     for (auto &iv : textureImageViews) {
-      vk::DescriptorImageInfo imageInfo{
-          iv, vk::ImageLayout::eShaderReadOnlyOptimal};
+      vk::DescriptorImageInfo imageInfo{};
+      imageInfo.imageView = iv;
+      imageInfo.imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal;
       imageInfos.push_back(imageInfo);
     }
 
@@ -1505,13 +1504,13 @@ private:
     allocInfo.level = vk::CommandBufferLevel::ePrimary;
     allocInfo.commandBufferCount = 1;
     vk::raii::CommandBuffer commandBuffer =
-        vk::raii::CommandBuffers(device, allocInfo).front();
+        std::move(vk::raii::CommandBuffers(device, allocInfo).front());
 
     vk::CommandBufferBeginInfo beginInfo{};
     beginInfo.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
     commandBuffer.begin(beginInfo);
 
-    return std::move(commandBuffer);
+    return commandBuffer;
   }
 
   void
@@ -1904,4 +1903,4 @@ private:
 
     return EXIT_SUCCESS;
   }
-}
+};
