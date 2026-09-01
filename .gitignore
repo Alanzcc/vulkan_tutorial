@@ -11,5 +11,7 @@
 *.spv
 /subprojects/fastgltf/
 /subprojects/KTX-Software/
-/subprojects/glfw/
-/subprojects/glm/
+/subprojects/glfw-3.4
+/subprojects/glm-1.0.1
+/subprojects/packagecache
+

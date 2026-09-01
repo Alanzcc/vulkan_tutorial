@@ -68,4 +68,5 @@ executable(
   'vulkan_tutorial',
   sources,
   dependencies : dependencies,
+  cpp_args: ['-DVULKAN_HPP_HANDLE_ERROR_OUT_OF_DATE_AS_SUCCESS'],
 )

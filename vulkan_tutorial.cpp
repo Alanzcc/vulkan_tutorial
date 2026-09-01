@@ -1503,7 +1503,7 @@ private:
 
     // 2) Depth attachment image -> DepthStencilAttachmentOptimal
     transition_image_layout(*depthImage, vk::ImageLayout::eUndefined,
-                            vk::ImageLayout::eDepthStencilAttachmentOptimal,
+                            vk::ImageLayout::eDepthAttachmentOptimal,
                             vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
                             vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
                             vk::PipelineStageFlagBits2::eEarlyFragmentTests |
@@ -1538,6 +1538,7 @@ private:
       colorAttachmentInfo.resolveImageView = swapChainImageViews[imageIndex];
       colorAttachmentInfo.resolveImageLayout =
           vk::ImageLayout::eColorAttachmentOptimal;
+      colorAttachmentInfo.resolveMode = vk::ResolveModeFlagBits::eAverage;
       colorAttachmentInfo.loadOp = vk::AttachmentLoadOp::eClear;
       colorAttachmentInfo.storeOp = vk::AttachmentStoreOp::eStore;
       colorAttachmentInfo.clearValue = clearColor;
