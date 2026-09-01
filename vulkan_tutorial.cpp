@@ -14,7 +14,6 @@
 #include <vector>
 
 // Graphics API
-#define VK_ENABLE_BETA_EXTENSIONS
 #include "profiles/vulkan_profiles.hpp"
 #include <vulkan/vulkan_raii.hpp>
 
@@ -195,7 +194,6 @@ private:
   bool framebufferResized = false;
 
   std::vector<const char *> requiredDeviceExtension = {
-      vk::KHRPortabilitySubsetExtensionName,
       vk::KHRSwapchainExtensionName,
   };
 
@@ -346,13 +344,9 @@ private:
 
     // Get the required extensions.
     auto extensions = getRequiredInstanceExtensions();
-    // MACOS ONLY MoltenVK portability flag
-    extensions.push_back(vk::KHRPortabilityEnumerationExtensionName);
 
     vk::InstanceCreateInfo createInfo{};
     createInfo.pApplicationInfo = &appInfo;
-    // Add the portability enumeration flag to enable MoltenVK support on macOS
-    createInfo.flags = vk::InstanceCreateFlagBits::eEnumeratePortabilityKHR;
     createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
     createInfo.ppEnabledExtensionNames = extensions.data();
 
