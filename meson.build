@@ -3,14 +3,18 @@ project(
   'cpp',
   version : '0.1',
   meson_version : '>= 1.3.0',
-  default_options : ['warning_level=3', 'cpp_std=c++23'],
+  default_options : ['warning_level=3', 'cpp_std=c++20'],
 )
 
 cmake = import('cmake')
 
+# External Libraries
+glfw_sub = subproject('glfw', default_options: ['default_library=static'])
+glfw_dep = glfw_sub.get_variable('glfw_dep')
+glm_sub = subproject('glm')
+glm_dep = glm_sub.get_variable('glm_dep')
 fastgltf_sub = cmake.subproject('fastgltf')
 fastgltf_dep = fastgltf_sub.dependency('fastgltf')
-
 ktx_opts = cmake.subproject_options()
 ktx_opts.add_cmake_defines({
   'KTX_FEATURE_VULKAN':    true,
@@ -20,14 +24,14 @@ ktx_opts.add_cmake_defines({
   'KTX_FEATURE_DOC':       false,
   'BUILD_SHARED_LIBS':     false,
 })
-
 ktx_sub = cmake.subproject('KTX-Software', options: ktx_opts)
 ktx_dep = ktx_sub.dependency('ktx')
 
+
 dependencies = [
   dependency('vulkan', required : true),
-  dependency('glfw3', modules: ['glfw']),
-  dependency('glm', required : true),
+  glfw_dep,
+  glm_dep,
   fastgltf_dep,
   ktx_dep,
 ]

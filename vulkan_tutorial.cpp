@@ -1435,8 +1435,7 @@ private:
     vk::CommandBufferBeginInfo beginInfo{};
     beginInfo.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
     commandBuffer.begin(beginInfo);
-
-    return std::move(commandBuffer);
+    return commandBuffer;
   }
 
   void

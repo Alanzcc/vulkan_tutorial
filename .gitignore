@@ -10,4 +10,6 @@
 .vscode
 *.spv
 /subprojects/fastgltf/
-/subprojects/KTX-Software
+/subprojects/KTX-Software/
+/subprojects/glfw/
+/subprojects/glm/
