@@ -1243,11 +1243,7 @@ private:
     auto data = fastgltf::GltfDataBuffer::FromPath(MODEL_PATH);
     if (data.error() != fastgltf::Error::None)
       throw std::runtime_error("Failed to read glTF file: " +
-<<<<<<< HEAD
-                               MODEL_PATH.string());
-=======
                                (MODEL_PATH).string());
->>>>>>> 4214135 (Windows compatibility fixes)
 
     auto assetResult =
         parser.loadGltfBinary(data.get(), MODEL_PATH.parent_path(),
@@ -1439,10 +1435,6 @@ private:
     vk::CommandBufferBeginInfo beginInfo{};
     beginInfo.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit;
     commandBuffer.begin(beginInfo);
-<<<<<<< HEAD
-=======
-
->>>>>>> 4214135 (Windows compatibility fixes)
     return commandBuffer;
   }
 
