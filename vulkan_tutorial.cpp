@@ -1,3 +1,4 @@
+#include "vulkan/vulkan.hpp"
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -14,7 +15,6 @@
 #include <utility>
 #include <vector>
 
-#define VK_ENABLE_BETA_EXTENSIONS
 #include <vulkan/vulkan_raii.hpp>
 
 #define GLFW_INCLUDE_VULKAN // REQUIRED only for GLFW CreateWindowSurface.
@@ -27,6 +27,7 @@
 #include <glm/gtx/hash.hpp>
 
 #define TINYOBJLOADER_IMPLEMENTATION
+#define TINYOBJLOADER_DISABLE_FAST_FLOAT
 #include "tiny_obj_loader.h"
 
 #define STB_IMAGE_IMPLEMENTATION
@@ -35,6 +36,10 @@
 constexpr uint32_t WIDTH = 800;
 constexpr uint32_t HEIGHT = 600;
 const std::string MODEL_PATH = "../assets/models/plant_on_table.obj";
+std::string modelDir = MODEL_PATH.substr(0, MODEL_PATH.find_last_of("/\\"));
+const std::string assetsRoot = modelDir.substr(0, modelDir.find_last_of("/\\"));
+const std::string textureRoot =
+    assetsRoot + "/textures/plant_on_table_textures/";
 constexpr int MAX_FRAMES_IN_FLIGHT = 2;
 
 const std::vector<char const *> validationLayers = {
@@ -51,58 +56,45 @@ struct Vertex {
   glm::vec3 pos;
   glm::vec3 color;
   glm::vec2 texCoord;
+  glm::vec3 normal;
 
   static vk::VertexInputBindingDescription getBindingDescription() {
-    vk::VertexInputBindingDescription bindingDescription{};
-    bindingDescription.binding = 0;
-    bindingDescription.stride = sizeof(Vertex);
-    bindingDescription.inputRate = vk::VertexInputRate::eVertex;
-    return bindingDescription;
+    return {0, sizeof(Vertex), vk::VertexInputRate::eVertex};
   }
 
-  static std::array<vk::VertexInputAttributeDescription, 3>
+  static std::array<vk::VertexInputAttributeDescription, 4>
   getAttributeDescriptions() {
-    vk::VertexInputAttributeDescription positionAttributeDescription{};
-    positionAttributeDescription.location = 0;
-    positionAttributeDescription.binding = 0;
-    positionAttributeDescription.format = vk::Format::eR32G32B32Sfloat;
-    positionAttributeDescription.offset = offsetof(Vertex, pos);
-
-    vk::VertexInputAttributeDescription colorAttributeDescription{};
-    colorAttributeDescription.location = 1;
-    colorAttributeDescription.binding = 0;
-    colorAttributeDescription.format = vk::Format::eR32G32B32Sfloat;
-    colorAttributeDescription.offset = offsetof(Vertex, color);
-
-    vk::VertexInputAttributeDescription texCoordAttributeDescription{};
-    texCoordAttributeDescription.location = 2;
-    texCoordAttributeDescription.binding = 0;
-    texCoordAttributeDescription.format = vk::Format::eR32G32Sfloat;
-    texCoordAttributeDescription.offset = offsetof(Vertex, texCoord);
-
-    return {positionAttributeDescription, colorAttributeDescription,
-            texCoordAttributeDescription};
+    return {vk::VertexInputAttributeDescription(
+                0, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, pos)),
+            vk::VertexInputAttributeDescription(
+                1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, color)),
+            vk::VertexInputAttributeDescription(2, 0, vk::Format::eR32G32Sfloat,
+                                                offsetof(Vertex, texCoord)),
+            vk::VertexInputAttributeDescription(
+                3, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, normal))};
   }
 
   bool operator==(const Vertex &other) const {
     return pos == other.pos && color == other.color &&
-           texCoord == other.texCoord;
+           texCoord == other.texCoord && normal == other.normal;
   }
 };
 
 template <> struct std::hash<Vertex> {
   size_t operator()(Vertex const &vertex) const noexcept {
-    return ((hash<glm::vec3>()(vertex.pos) ^
-             (hash<glm::vec3>()(vertex.color) << 1)) >>
-            1) ^
-           (hash<glm::vec2>()(vertex.texCoord) << 1);
+    auto h = std::hash<glm::vec3>()(vertex.pos) ^
+             (std::hash<glm::vec3>()(vertex.color) << 1);
+    h = (h >> 1) ^ (std::hash<glm::vec2>()(vertex.texCoord) << 1);
+    h = (h >> 1) ^ (std::hash<glm::vec3>()(vertex.normal) << 1);
+    return h;
   }
 };
 
 struct UniformBufferObject {
-  glm::mat4 model;
-  glm::mat4 view;
-  glm::mat4 proj;
+  alignas(16) glm::mat4 model;
+  alignas(16) glm::mat4 view;
+  alignas(16) glm::mat4 proj;
+  alignas(16) glm::vec3 cameraPos;
 };
 
 struct PushConstant {
@@ -144,8 +136,8 @@ private:
   vk::raii::DeviceMemory depthImageMemory = nullptr;
   vk::raii::ImageView depthImageView = nullptr;
 
-  vk::raii::Image textureImage = nullptr;
-  vk::raii::DeviceMemory textureImageMemory = nullptr;
+  std::vector<vk::raii::Image> textureImages;
+  std::vector<vk::raii::DeviceMemory> textureImageMemories;
   std::vector<vk::raii::ImageView> textureImageViews;
   vk::raii::Sampler textureSampler = nullptr;
 
@@ -215,7 +207,6 @@ private:
   bool framebufferResized = false;
 
   std::vector<const char *> requiredDeviceExtension = {
-      vk::KHRPortabilitySubsetExtensionName,
       vk::KHRSwapchainExtensionName,
       vk::KHRAccelerationStructureExtensionName,
       vk::KHRDeferredHostOperationsExtensionName,
@@ -261,10 +252,6 @@ private:
     createGraphicsPipeline();
     createDepthResources();
     createTextureSampler();
-
-    //        createTextureImage();
-    //       createTextureImageView();
-
     createVertexBuffer();
     createIndexBuffer();
 
@@ -345,8 +332,6 @@ private:
 
     // Get the required extensions.
     auto requiredExtensions = getRequiredInstanceExtensions();
-    // MACOS ONLY MoltenVK portability flag
-    requiredExtensions.push_back(vk::KHRPortabilityEnumerationExtensionName);
 
     // Check if the required extensions are supported by the Vulkan
     // implementation.
@@ -368,8 +353,6 @@ private:
 
     vk::InstanceCreateInfo createInfo{};
     createInfo.pApplicationInfo = &appInfo;
-    // Add the portability enumeration flag to enable MoltenVK support on macOS
-    createInfo.flags = vk::InstanceCreateFlagBits::eEnumeratePortabilityKHR;
     createInfo.enabledLayerCount = static_cast<uint32_t>(requiredLayers.size());
     createInfo.ppEnabledLayerNames = requiredLayers.data();
     createInfo.enabledExtensionCount =
@@ -640,7 +623,8 @@ private:
         vk::raii::DescriptorSetLayout(device, globalLayoutInfo);
 
     // Use descriptor set 1 for bindless material data
-    uint32_t textureCount = static_cast<uint32_t>(textureImageViews.size());
+    uint32_t textureCount =
+        std::max<uint32_t>(1u, static_cast<uint32_t>(textureImageViews.size()));
 
     std::array material_bindings = {
         vk::DescriptorSetLayoutBinding(0, vk::DescriptorType::eSampler, 1,
@@ -672,7 +656,7 @@ private:
 
   void createGraphicsPipeline() {
     vk::raii::ShaderModule shaderModule =
-        createShaderModule(readFile("../shaders/simple.spv"));
+        createShaderModule(readFile("simple.spv"));
 
     vk::PipelineShaderStageCreateInfo vertShaderStageInfo{};
     vertShaderStageInfo.stage = vk::ShaderStageFlagBits::eVertex;
@@ -752,6 +736,7 @@ private:
     pipelineLayoutInfo.setLayoutCount = 2;
     pipelineLayoutInfo.pSetLayouts = setLayouts;
     pipelineLayoutInfo.pushConstantRangeCount = 1;
+    pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
     pipelineLayout = vk::raii::PipelineLayout(device, pipelineLayoutInfo);
 
     vk::GraphicsPipelineCreateInfo pipelineCreateInfo{};
@@ -848,6 +833,13 @@ private:
     memoryAllocateInfo.allocationSize = memRequirements.size;
     memoryAllocateInfo.memoryTypeIndex =
         findMemoryType(memRequirements.memoryTypeBits, properties);
+
+    vk::MemoryAllocateFlagsInfo allocFlagsInfo{};
+    if (usage & vk::BufferUsageFlagBits::eShaderDeviceAddress) {
+      allocFlagsInfo.flags = vk::MemoryAllocateFlagBits::eDeviceAddress;
+      memoryAllocateInfo.pNext = &allocFlagsInfo;
+    }
+
     vk::raii::DeviceMemory bufferMemory =
         vk::raii::DeviceMemory(device, memoryAllocateInfo);
 
@@ -875,6 +867,9 @@ private:
     stagingBufferMemory.unmapMemory();
     stbi_image_free(pixels);
 
+    vk::raii::Image textureImage = nullptr;
+    vk::raii::DeviceMemory textureImageMemory = nullptr;
+
     std::tie(textureImage, textureImageMemory) = createImage(
         texWidth, texHeight, vk::Format::eR8G8B8A8Srgb,
         vk::ImageTiling::eOptimal,
@@ -888,10 +883,13 @@ private:
                       static_cast<uint32_t>(texHeight));
     transitionImageLayout(textureImage, vk::ImageLayout::eTransferDstOptimal,
                           vk::ImageLayout::eShaderReadOnlyOptimal);
+
+    return std::make_pair(std::move(textureImage),
+                          std::move(textureImageMemory));
   }
 
-  vk::raii::ImageView createTextureImageView() {
-    return createImageView(*textureImage, vk::Format::eR8G8B8A8Srgb,
+  vk::raii::ImageView createTextureImageView(vk::raii::Image &textureImage) {
+    return createImageView(textureImage, vk::Format::eR8G8B8A8Srgb,
                            vk::ImageAspectFlagBits::eColor);
   }
 
@@ -1014,17 +1012,31 @@ private:
   void loadModel() {
     tinyobj::attrib_t attrib;
     std::vector<tinyobj::shape_t> shapes;
-    std::vector<tinyobj::material_t> materials;
+    std::vector<tinyobj::material_t> localMaterials;
     std::string warn, err;
 
-    if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err,
-                          MODEL_PATH.c_str())) {
+    if (!LoadObj(
+            &attrib, &shapes, &localMaterials, &warn, &err, MODEL_PATH.c_str(),
+            MODEL_PATH.substr(0, MODEL_PATH.find_last_of("/\\")).c_str())) {
       throw std::runtime_error(warn + err);
     }
 
+    size_t materialOffset = materials.size();
+    size_t oldTextureCount = textureImageViews.size();
+
+    materials.insert(materials.end(), localMaterials.begin(),
+                     localMaterials.end());
+
     std::unordered_map<Vertex, uint32_t> uniqueVertices{};
+    uint32_t indexOffset = 0;
 
     for (const auto &shape : shapes) {
+      std::cout << "Loading mesh: " << shape.name << ": "
+                << shape.mesh.indices.size() / 3 << " triangles\n";
+
+      uint32_t startOffset = indexOffset;
+      uint32_t localMaxV = 0;
+
       for (const auto &index : shape.mesh.indices) {
         Vertex vertex{};
 
@@ -1038,18 +1050,72 @@ private:
 
         vertex.color = {1.0f, 1.0f, 1.0f};
 
-#if 1
-        auto [it, inserted] = uniqueVertices.insert(
-            {vertex, static_cast<uint32_t>(vertices.size())});
-        if (inserted) {
+        if (index.normal_index >= 0) {
+          vertex.normal = {attrib.normals[3 * index.normal_index + 0],
+                           attrib.normals[3 * index.normal_index + 1],
+                           attrib.normals[3 * index.normal_index + 2]};
+        } else {
+          vertex.normal = {0.0f, 0.0f, 0.0f};
+        }
+
+        if (!uniqueVertices.contains(vertex)) {
+          uniqueVertices[vertex] = static_cast<uint32_t>(vertices.size());
           vertices.push_back(vertex);
         }
 
-        indices.push_back(it->second);
-#else
-        vertices.push_back(vertex);
-        indices.push_back(static_cast<uint32_t>(indices.size()));
-#endif
+        indices.push_back(uniqueVertices[vertex]);
+
+        indexOffset++;
+
+        uint32_t vi;
+        auto it = uniqueVertices.find(vertex);
+        if (it != uniqueVertices.end()) {
+          vi = it->second;
+        } else {
+          vi = static_cast<uint32_t>(vertices.size());
+          uniqueVertices[vertex] = vi;
+          vertices.push_back(vertex);
+        }
+
+        localMaxV = std::max(localMaxV, vi);
+      }
+
+      int localMaterialID =
+          shape.mesh.material_ids.empty() ? -1 : shape.mesh.material_ids[0];
+      int globalMaterialID =
+          (localMaterialID < 0)
+              ? -1
+              : static_cast<int>(materialOffset + localMaterialID);
+
+      uint32_t indexCount = indexOffset - startOffset;
+
+      // Note that this is only valid for this particular MODEL_PATH
+      bool alphaCut = (shape.name.find("nettle_plant") != std::string::npos);
+      bool reflective = (shape.name.find("table") != std::string::npos);
+
+      submeshes.push_back({.indexOffset = startOffset,
+                           .indexCount = indexCount,
+                           .materialID = globalMaterialID,
+                           .firstVertex = 0u,
+                           .maxVertex = localMaxV + 1,
+                           .alphaCut = alphaCut,
+                           .reflective = reflective});
+    }
+
+    for (size_t i = 0; i < localMaterials.size(); ++i) {
+      const auto &material = localMaterials[i];
+
+      if (!material.diffuse_texname.empty()) {
+        std::string texname = material.diffuse_texname;
+        texname = texname.substr(texname.find_last_of('/') + 1);
+        std::string texturePath = textureRoot + texname;
+        auto [img, mem] = createTextureImage(texturePath);
+        textureImages.push_back(std::move(img));
+        textureImageMemories.push_back(std::move(mem));
+        textureImageViews.emplace_back(
+            createTextureImageView(textureImages.back()));
+      } else {
+        std::cout << "No texture for material: " << material.name << std::endl;
       }
     }
   }
@@ -1069,7 +1135,10 @@ private:
     std::tie(vertexBuffer, vertexBufferMemory) =
         createBuffer(bufferSize,
                      vk::BufferUsageFlagBits::eTransferDst |
-                         vk::BufferUsageFlagBits::eVertexBuffer,
+                         vk::BufferUsageFlagBits::eVertexBuffer |
+                         vk::BufferUsageFlagBits::eShaderDeviceAddress |
+                         vk::BufferUsageFlagBits::
+                             eAccelerationStructureBuildInputReadOnlyKHR,
                      vk::MemoryPropertyFlagBits::eDeviceLocal);
 
     copyBuffer(stagingBuffer, vertexBuffer, bufferSize);
@@ -1090,7 +1159,11 @@ private:
     std::tie(indexBuffer, indexBufferMemory) =
         createBuffer(bufferSize,
                      vk::BufferUsageFlagBits::eIndexBuffer |
-                         vk::BufferUsageFlagBits::eTransferDst,
+                         vk::BufferUsageFlagBits::eTransferDst |
+                         vk::BufferUsageFlagBits::eShaderDeviceAddress |
+                         vk::BufferUsageFlagBits::
+                             eAccelerationStructureBuildInputReadOnlyKHR |
+                         vk::BufferUsageFlagBits::eStorageBuffer,
                      vk::MemoryPropertyFlagBits::eDeviceLocal);
 
     copyBuffer(stagingBuffer, indexBuffer, bufferSize);
@@ -1120,6 +1193,8 @@ private:
                      vk::BufferUsageFlagBits::eTransferDst |
                          vk::BufferUsageFlagBits::eStorageBuffer,
                      vk::MemoryPropertyFlagBits::eDeviceLocal);
+
+    copyBuffer(stagingBuffer, uvBuffer, bufferSize);
   }
 
   void createUniformBuffers() {
@@ -1217,7 +1292,9 @@ private:
       std::tie(blasBuffers[i], blasMemories[i]) = createBuffer(
           blasBuildSizes.accelerationStructureSize,
           vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR |
-              vk::BufferUsageFlagBits::eShaderDeviceAddress,
+              vk::BufferUsageFlagBits::eShaderDeviceAddress |
+              vk::BufferUsageFlagBits::
+                  eAccelerationStructureBuildInputReadOnlyKHR,
           vk::MemoryPropertyFlagBits::eDeviceLocal);
 
       // Create and store the BLAS handle
@@ -1273,8 +1350,7 @@ private:
 
     vk::BufferDeviceAddressInfo instanceAddrInfo{};
     instanceAddrInfo.buffer = instanceBuffer;
-    vk::DeviceAddress instanceAddr =
-        device.getBufferAddressKHR(instanceAddrInfo);
+    vk::DeviceAddress instanceAddr = device.getBufferAddress(instanceAddrInfo);
 
     // Prepare the geometry (instance) data
     vk::AccelerationStructureGeometryInstancesDataKHR instancesData{};
@@ -1312,8 +1388,7 @@ private:
     // Save the scratch buffer address in the build info structure
     vk::BufferDeviceAddressInfo scratchAddressInfo{};
     scratchAddressInfo.buffer = *tlasScratchBuffer;
-    vk::DeviceAddress scratchAddr =
-        device.getBufferAddressKHR(scratchAddressInfo);
+    vk::DeviceAddress scratchAddr = device.getBufferAddress(scratchAddressInfo);
     tlasBuildGeometryInfo.scratchData.deviceAddress = scratchAddr;
 
     // Create a buffer for the TLAS itself now that we now the required size
@@ -1368,7 +1443,7 @@ private:
     vk::DescriptorPoolCreateInfo poolInfo{};
     poolInfo.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet |
                      vk::DescriptorPoolCreateFlagBits::eUpdateAfterBind,
-    poolInfo.maxSets = MAX_FRAMES_IN_FLIGHT;
+    poolInfo.maxSets = MAX_FRAMES_IN_FLIGHT + 1; // 2 globals and 1 material
     poolInfo.poolSizeCount = static_cast<uint32_t>(poolSize.size());
     poolInfo.pPoolSizes = poolSize.data();
 
@@ -1429,9 +1504,9 @@ private:
 
       // UVs SSBOs
       vk::DescriptorBufferInfo uvBufferInfo{};
-      uvBufferInfo.buffer = indexBuffer;
+      uvBufferInfo.buffer = uvBuffer;
       uvBufferInfo.offset = 0;
-      uvBufferInfo.range = sizeof(uint32_t) * indices.size();
+      uvBufferInfo.range = sizeof(uint32_t) * vertices.size();
 
       vk::WriteDescriptorSet uvBufferWrite{};
       uvBufferWrite.dstSet = globalDescriptorSets[i];
@@ -1626,8 +1701,17 @@ private:
     commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
                                      pipelineLayout, 1,
                                      *materialDescriptorSets[0], nullptr);
-    commandBuffer.drawIndexed(static_cast<uint32_t>(indices.size()), 1, 0, 0,
-                              0);
+    for (auto &sub : submeshes) {
+      PushConstant pc{};
+      pc.materialIndex =
+          sub.materialID >= 0 ? static_cast<uint32_t>(sub.materialID) : 0u;
+      pc.reflective = sub.reflective ? 1u : 0u;
+
+      commandBuffer.pushConstants<PushConstant>(
+          pipelineLayout, vk::ShaderStageFlagBits::eFragment, 0, pc);
+
+      commandBuffer.drawIndexed(sub.indexCount, 1, sub.indexOffset, 0, 0);
+    }
     commandBuffer.endRendering();
 
     // After rendering, transition the swapchain image to
@@ -1695,17 +1779,18 @@ private:
                      currentTime - startTime)
                      .count();
 
-    UniformBufferObject ubo{};
-    ubo.model = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f),
-                            glm::vec3(0.0f, 0.0f, 1.0f));
-    ubo.view =
-        glm::lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f),
-                    glm::vec3(0.0f, 0.0f, 1.0f));
+    auto eye = glm::vec3(2.0f, 2.0f, 2.0f);
+
+    ubo.model = rotate(glm::mat4(1.0f), time * 0.1f * glm::radians(90.0f),
+                       glm::vec3(0.0f, 0.0f, 1.0f));
+    ubo.view = glm::lookAt(eye, glm::vec3(0.0f, 0.0f, 0.0f),
+                           glm::vec3(0.0f, 0.0f, 1.0f));
     ubo.proj = glm::perspective(glm::radians(45.0f),
                                 static_cast<float>(swapChainExtent.width) /
                                     static_cast<float>(swapChainExtent.height),
                                 0.1f, 10.0f);
     ubo.proj[1][1] *= -1; // Invert Y coordinate of the clip space
+    ubo.cameraPos = eye;
 
     std::memcpy(uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
   }

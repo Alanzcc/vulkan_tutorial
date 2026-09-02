@@ -28,7 +28,7 @@ struct InstanceLUT {
     uint materialID;
     uint indexBufferOffset;
   };
-[[vk::binding(4,0)]];
+[[vk::binding(4,0)]]
 StructuredBuffer<InstanceLUT> instanceLUTBuffer;
 
 struct VSOutput {

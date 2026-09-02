@@ -1,7 +1,14 @@
 /bin
 /build
-/textures/*
-/models/*
+/assets
+/profiles
+/subprojects/KTX-Software
+/subprojects/fastgltf
+/subprojects/glfw-3.4
+/subprojects/glm-1.0.1
+/terminal_commands
+tmp.cpp
+/shaders/tmp.slang
 .editorconfig
 .DS_Store
 .vscode
