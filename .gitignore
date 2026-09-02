@@ -6,6 +6,7 @@
 /subprojects/fastgltf
 /subprojects/glfw-3.4
 /subprojects/glm-1.0.1
+/subprojects/packagecache
 /terminal_commands
 tmp.cpp
 /shaders/tmp.slang
